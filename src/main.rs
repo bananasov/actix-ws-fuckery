@@ -32,6 +32,7 @@ async fn main() -> anyhow::Result<()> {
             .wrap(Logger::default())
             .app_data(web::Data::new(websocket_server.clone()))
             .service(ws::ws_handler)
+            .service(ws::start_ws)
             .service(index)
     })
     .bind("127.0.0.1:8080")?
