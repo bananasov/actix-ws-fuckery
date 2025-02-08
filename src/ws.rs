@@ -81,11 +81,11 @@ impl WebSocketServer {
         let inner = self.inner.lock().await;
 
         tracing::debug!("Using token {uuid}");
-        let token = inner
+
+        let (_uuid, token) = inner
             .pending_tokens
-            .get(uuid)
-            .ok_or_else(|| anyhow!("Expected token to exist"))?;
-        let token = token.clone(); // I don't like it, yolo
+            .remove(uuid)
+            .ok_or_else(|| anyhow!("Expected token to exist"))?; // TODO: Use proper error messages instead of anyhow
 
         Ok(token)
     }
