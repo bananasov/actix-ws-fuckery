@@ -9,6 +9,7 @@ use actix_ws::{AggregatedMessage, Session};
 use anyhow::anyhow;
 use bytestring::ByteString;
 use dashmap::DashMap;
+use futures::{StreamExt, TryStreamExt, stream::FuturesUnordered};
 use tokio::sync::Mutex;
 use tracing::instrument;
 use uuid::Uuid;
@@ -94,17 +95,23 @@ impl WebSocketServer {
         let msg = msg.into();
 
         let inner = self.inner.lock().await;
+        let mut futures = FuturesUnordered::new();
 
         // TODO: Do this in parallel, maybe using `FuturesUnordered`
         for mut entry in inner.sessions.iter_mut() {
             let msg = msg.clone();
-            let session = entry.value_mut();
             tracing::info!("Sending msg: {msg}");
 
-            let _ = session
-                .text(msg)
-                .await
-                .map_err(|_| tracing::debug!("Dropping session"));
+            futures.push(async move {
+                let session = entry.value_mut();
+                session.text(msg).await
+            });
+        }
+
+        while let Some(result) = futures.next().await {
+            if let Err(_) = result {
+                tracing::warn!("Got an unexpected closed session");
+            }
         }
     }
 }
