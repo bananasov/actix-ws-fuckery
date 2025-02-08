@@ -9,7 +9,7 @@ pub struct WebSocketTokenData {
 #[derive(Debug, Default, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct WebSocketStartConnectionBody {
     #[serde(rename = "privatekey")]
-    pub private_key: String,
+    pub private_key: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]

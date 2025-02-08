@@ -65,7 +65,7 @@ impl WebSocketServer {
         tracing::debug!("Inserting token {uuid} into cache");
 
         actix_web::rt::spawn(async move {
-            tokio::time::sleep(TOKEN_EXPIRATION).await;
+            time::sleep(TOKEN_EXPIRATION).await;
 
             let inner_mutex = inner_clone.lock().await;
             if inner_mutex.pending_tokens.contains_key(&uuid) {
@@ -120,9 +120,9 @@ pub async fn start_ws(
     server: web::Data<WebSocketServer>,
     details: Option<web::Json<WebSocketStartConnectionBody>>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let private_key = details.map(|details| details.private_key.clone()); // I do not like this, we ball. Blame serde-json.
+    let details = details.map(|d| d.into_inner()).unwrap_or_default(); // I do not like this, we ball. Blame serde-json.
 
-    let token = match private_key {
+    let token = match details.private_key {
         Some(private_key) => {
             let address = String::from("dummyaddr");
             let token_data = WebSocketTokenData::new(address, Some(private_key));
