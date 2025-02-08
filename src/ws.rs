@@ -97,7 +97,6 @@ impl WebSocketServer {
         let inner = self.inner.lock().await;
         let mut futures = FuturesUnordered::new();
 
-        // TODO: Do this in parallel, maybe using `FuturesUnordered`
         for mut entry in inner.sessions.iter_mut() {
             let msg = msg.clone();
             tracing::info!("Sending msg: {msg}");
