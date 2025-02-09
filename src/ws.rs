@@ -9,14 +9,15 @@ use actix_ws::{AggregatedMessage, Session};
 use anyhow::anyhow;
 use bytestring::ByteString;
 use dashmap::DashMap;
-use futures::{StreamExt, TryStreamExt, stream::FuturesUnordered};
+use futures::{StreamExt, stream::FuturesUnordered};
 use tokio::sync::Mutex;
 use tracing::instrument;
 use uuid::Uuid;
 
 use crate::models::websocket::{
-    WebSocketStartConnectionBody, WebSocketStartResponse, WebSocketTokenData,
+    WebSocketSessionData, WebSocketSubscriptionList, WebSocketTokenData,
 };
+use crate::models::websocket::{WebSocketStartConnectionBody, WebSocketStartResponse};
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -29,7 +30,7 @@ pub struct WebSocketServer {
 
 #[derive(Clone)]
 pub struct WebSocketServerInner {
-    sessions: DashMap<Uuid, Session>,
+    sessions: DashMap<Uuid, WebSocketSessionData>,
     pending_tokens: DashMap<Uuid, WebSocketTokenData>,
 }
 
@@ -45,8 +46,15 @@ impl WebSocketServer {
         }
     }
 
-    async fn insert_session(&self, uuid: Uuid, session: Session) {
-        self.inner.lock().await.sessions.insert(uuid, session);
+    async fn insert_session(&self, uuid: Uuid, session: Session, data: WebSocketTokenData) {
+        let session_data = WebSocketSessionData {
+            address: data.address,
+            private_key: data.private_key,
+            session,
+            subscriptions: WebSocketSubscriptionList::default(),
+        };
+
+        self.inner.lock().await.sessions.insert(uuid, session_data);
     }
 
     async fn cleanup_session(&self, uuid: &Uuid) {
@@ -102,8 +110,8 @@ impl WebSocketServer {
             tracing::info!("Sending msg: {msg}");
 
             futures.push(async move {
-                let session = entry.value_mut();
-                session.text(msg).await
+                let session_data = entry.value_mut();
+                session_data.session.text(msg).await
             });
         }
 
@@ -167,8 +175,8 @@ pub async fn ws_handler(
         .await
         .expect("Token does not exist, sad");
 
-    server.insert_session(token, session.clone()).await;
-    tracing::info!("Inserted new session (address: {})", data.address);
+    tracing::info!("Inserting new session (address: {})", data.address);
+    server.insert_session(token, session.clone(), data).await;
 
     let alive = Arc::new(Mutex::new(Instant::now()));
     let mut session2 = session.clone();
