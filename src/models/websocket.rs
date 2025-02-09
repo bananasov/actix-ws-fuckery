@@ -1,3 +1,5 @@
+pub mod messages;
+
 use dashmap::DashSet;
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +40,26 @@ pub enum WebSocketSubscriptionType {
     Names,
     OwnNames,
     Motd,
+}
+
+impl WebSocketSubscriptionType {
+    pub fn is_valid(subscription_type: &str) -> bool {
+        subscription_type
+            .parse::<WebSocketSubscriptionType>()
+            .is_ok()
+    }
+
+    pub fn into_string(&self) -> String {
+        match self {
+            WebSocketSubscriptionType::Blocks => "blocks".to_owned(),
+            WebSocketSubscriptionType::OwnBlocks => "ownBlocks".to_owned(),
+            WebSocketSubscriptionType::Transactions => "transactions".to_owned(),
+            WebSocketSubscriptionType::OwnTransactions => "ownTransactions".to_owned(),
+            WebSocketSubscriptionType::Names => "names".to_owned(),
+            WebSocketSubscriptionType::OwnNames => "ownNames".to_owned(),
+            WebSocketSubscriptionType::Motd => "motd".to_owned(),
+        }
+    }
 }
 
 impl std::str::FromStr for WebSocketSubscriptionType {

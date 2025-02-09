@@ -14,7 +14,10 @@ use tokio::sync::Mutex;
 use tracing::instrument;
 use uuid::Uuid;
 
-use crate::models::websocket::{WebSocketSessionData, WebSocketTokenData};
+use crate::models::websocket::{
+    WebSocketSessionData, WebSocketTokenData,
+    messages::{WebSocketMessage, WebSocketMessageInner, WebSocketMessageResponse},
+};
 use crate::models::websocket::{
     WebSocketStartConnectionBody, WebSocketStartResponse, WebSocketSubscriptionType,
 };
@@ -28,7 +31,7 @@ pub struct WebSocketServer {
     inner: Arc<Mutex<WebSocketServerInner>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct WebSocketServerInner {
     sessions: DashMap<Uuid, WebSocketSessionData>,
     pending_tokens: DashMap<Uuid, WebSocketTokenData>,
@@ -36,10 +39,7 @@ pub struct WebSocketServerInner {
 
 impl WebSocketServer {
     pub fn new() -> Self {
-        let inner = WebSocketServerInner {
-            sessions: DashMap::new(),
-            pending_tokens: DashMap::new(),
-        };
+        let inner = WebSocketServerInner::default();
 
         Self {
             inner: Arc::new(Mutex::new(inner)),
@@ -108,6 +108,7 @@ impl WebSocketServer {
 
         let entry = inner.sessions.get_mut(uuid);
         if let Some(data) = entry {
+            tracing::info!("Session {uuid} subscribed to event {event}");
             data.subscriptions.insert(event);
         } else {
             tracing::info!("Tried to subscribe to event {event} but found a non-existent session");
@@ -119,8 +120,22 @@ impl WebSocketServer {
 
         let entry = inner.sessions.get_mut(uuid);
         if let Some(data) = entry {
+            tracing::info!("Session {uuid} unsubscribed from event {event}");
             data.subscriptions.remove(event);
         }
+    }
+
+    pub async fn get_subscription_list(&self, uuid: &Uuid) -> Vec<WebSocketSubscriptionType> {
+        let inner = self.inner.lock().await;
+
+        let entry = inner.sessions.get(uuid);
+        if let Some(data) = entry {
+            let subscriptions: Vec<WebSocketSubscriptionType> =
+                data.subscriptions.iter().map(|x| x.clone()).collect(); // not my fav piece of code but it works
+            return subscriptions;
+        }
+
+        Vec::new()
     }
 
     /// Broadcast a message to all connected clients
@@ -141,7 +156,7 @@ impl WebSocketServer {
         }
 
         while let Some(result) = futures.next().await {
-            if let Err(_) = result {
+            if result.is_err() {
                 tracing::warn!("Got an unexpected closed session");
             }
         }
@@ -187,6 +202,7 @@ pub async fn ws_handler(
     server: web::Data<WebSocketServer>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let token = token.into_inner();
+    let server = server.into_inner(); // guh but okay
     let (response, mut session, stream) = actix_ws::handle(&req, body)?;
 
     let mut stream = stream
@@ -194,7 +210,7 @@ pub async fn ws_handler(
         .aggregate_continuations()
         .max_continuation_size(2 * 1024 * 1024);
 
-    let token = Uuid::from_str(&token).map_err(|err| ErrorBadRequest(err))?;
+    let token = Uuid::from_str(&token).map_err(ErrorBadRequest)?;
     let data = server
         .use_token(&token)
         .await
@@ -236,12 +252,11 @@ pub async fn ws_handler(
                 }
 
                 AggregatedMessage::Text(string) => {
-                    tracing::info!("Relaying text, {string}");
+                    let msg: WebSocketMessage =
+                        serde_json::from_str(&string).expect("wtf happened vro");
+                    tracing::info!("{:?}", msg);
 
-                    if session.text(string).await.is_err() {
-                        tracing::error!("Failed to send text back to session");
-                        return;
-                    }
+                    handle_websocket_message(&mut session, &token, &server, msg).await;
                 }
 
                 AggregatedMessage::Close(reason) => {
@@ -266,4 +281,94 @@ pub async fn ws_handler(
     });
 
     Ok(response)
+}
+
+async fn handle_websocket_message(
+    session: &mut Session,
+    uuid: &Uuid,
+    server: &WebSocketServer,
+    message: WebSocketMessage,
+) {
+    match message.r#type {
+        WebSocketMessageInner::Hello { motd: _ } => {} // Not sent by client
+        WebSocketMessageInner::Keepalive { server_time: _ } => {} // Not sent by client
+        WebSocketMessageInner::Response {
+            responding_to: _,
+            data: _,
+        } => {} // Not sent by client
+        WebSocketMessageInner::Work => {
+            let message = WebSocketMessageInner::Response {
+                responding_to: "work".to_owned(),
+                data: WebSocketMessageResponse::Work { work: 69420 },
+            };
+            let message =
+                serde_json::to_string(&message).expect("Failed to turn response into string");
+            let _ = session.text(message).await;
+        }
+        WebSocketMessageInner::MakeTransaction {
+            private_key: _,
+            to: _,
+            amount: _,
+            metadata: _,
+        } => todo!(),
+        WebSocketMessageInner::GetValidSubscriptionLevels => todo!(),
+        WebSocketMessageInner::Address {
+            address: _,
+            fetch_names: _,
+        } => todo!(),
+        WebSocketMessageInner::Me => todo!(),
+        WebSocketMessageInner::GetSubscriptionLevel => todo!(),
+        WebSocketMessageInner::Logout => todo!(),
+        WebSocketMessageInner::Login { private_key: _ } => todo!(),
+        WebSocketMessageInner::Subscribe { event } => {
+            if WebSocketSubscriptionType::is_valid(&event) {
+                let event = WebSocketSubscriptionType::from_str(&event).expect("guh");
+                let _ = server.subscribe_to_event(uuid, event).await;
+
+                let subscription_list = server.get_subscription_list(uuid).await;
+                let subscription_list: Vec<String> = subscription_list
+                    .into_iter()
+                    .map(|x| x.into_string())
+                    .collect();
+
+                let message = WebSocketMessageInner::Response {
+                    responding_to: "subscribe".to_owned(),
+                    data: WebSocketMessageResponse::Subscribe {
+                        subscription_level: subscription_list,
+                    },
+                };
+
+                let message =
+                    serde_json::to_string(&message).expect("Failed to turn response into string");
+                let _ = session.text(message).await;
+            } else {
+                // Send a message to the session
+            }
+        }
+        WebSocketMessageInner::Unsubscribe { event } => {
+            if WebSocketSubscriptionType::is_valid(&event) {
+                let event = WebSocketSubscriptionType::from_str(&event).expect("guh");
+                let _ = server.unsubscribe_from_event(uuid, &event).await;
+
+                let subscription_list = server.get_subscription_list(uuid).await;
+                let subscription_list: Vec<String> = subscription_list
+                    .into_iter()
+                    .map(|x| x.into_string())
+                    .collect();
+
+                let message = WebSocketMessageInner::Response {
+                    responding_to: "unsubscribe".to_owned(),
+                    data: WebSocketMessageResponse::Unsubscribe {
+                        subscription_level: subscription_list,
+                    },
+                };
+
+                let message =
+                    serde_json::to_string(&message).expect("Failed to turn response into string");
+                let _ = session.text(message).await;
+            } else {
+                // Send a message to the session
+            }
+        }
+    }
 }
