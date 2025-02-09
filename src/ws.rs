@@ -8,16 +8,16 @@ use actix_web::{HttpRequest, HttpResponse, error::ErrorBadRequest, get, post, rt
 use actix_ws::{AggregatedMessage, Session};
 use anyhow::anyhow;
 use bytestring::ByteString;
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use futures::{StreamExt, stream::FuturesUnordered};
 use tokio::sync::Mutex;
 use tracing::instrument;
 use uuid::Uuid;
 
+use crate::models::websocket::{WebSocketSessionData, WebSocketTokenData};
 use crate::models::websocket::{
-    WebSocketSessionData, WebSocketSubscriptionList, WebSocketTokenData,
+    WebSocketStartConnectionBody, WebSocketStartResponse, WebSocketSubscriptionType,
 };
-use crate::models::websocket::{WebSocketStartConnectionBody, WebSocketStartResponse};
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -46,18 +46,23 @@ impl WebSocketServer {
         }
     }
 
-    async fn insert_session(&self, uuid: Uuid, session: Session, data: WebSocketTokenData) {
+    pub async fn insert_session(&self, uuid: Uuid, session: Session, data: WebSocketTokenData) {
+        let subscriptions = DashSet::from_iter(vec![
+            WebSocketSubscriptionType::OwnTransactions,
+            WebSocketSubscriptionType::Blocks,
+        ]);
+
         let session_data = WebSocketSessionData {
             address: data.address,
             private_key: data.private_key,
             session,
-            subscriptions: WebSocketSubscriptionList::default(),
+            subscriptions,
         };
 
         self.inner.lock().await.sessions.insert(uuid, session_data);
     }
 
-    async fn cleanup_session(&self, uuid: &Uuid) {
+    pub async fn cleanup_session(&self, uuid: &Uuid) {
         tracing::info!("Cleaning up session {uuid}");
         self.inner.lock().await.sessions.remove(uuid);
     }
@@ -96,6 +101,26 @@ impl WebSocketServer {
             .ok_or_else(|| anyhow!("Expected token to exist"))?; // TODO: Use proper error messages instead of anyhow
 
         Ok(token)
+    }
+
+    pub async fn subscribe_to_event(&self, uuid: &Uuid, event: WebSocketSubscriptionType) {
+        let inner = self.inner.lock().await;
+
+        let entry = inner.sessions.get_mut(uuid);
+        if let Some(data) = entry {
+            data.subscriptions.insert(event);
+        } else {
+            tracing::info!("Tried to subscribe to event {event} but found a non-existent session");
+        }
+    }
+
+    pub async fn unsubscribe_from_event(&self, uuid: &Uuid, event: &WebSocketSubscriptionType) {
+        let inner = self.inner.lock().await;
+
+        let entry = inner.sessions.get_mut(uuid);
+        if let Some(data) = entry {
+            data.subscriptions.remove(event);
+        }
     }
 
     /// Broadcast a message to all connected clients
