@@ -331,10 +331,14 @@ async fn handle_websocket_message(
                     .map(|x| x.into_string())
                     .collect();
 
-                let message = WebSocketMessageInner::Response {
-                    responding_to: "subscribe".to_owned(),
-                    data: WebSocketMessageResponse::Subscribe {
-                        subscription_level: subscription_list,
+                let message = WebSocketMessage {
+                    ok: Some(true),
+                    id: message.id,
+                    r#type: WebSocketMessageInner::Response {
+                        responding_to: "subscribe".to_owned(),
+                        data: WebSocketMessageResponse::Subscribe {
+                            subscription_level: subscription_list,
+                        },
                     },
                 };
 
@@ -356,10 +360,14 @@ async fn handle_websocket_message(
                     .map(|x| x.into_string())
                     .collect();
 
-                let message = WebSocketMessageInner::Response {
-                    responding_to: "unsubscribe".to_owned(),
-                    data: WebSocketMessageResponse::Unsubscribe {
-                        subscription_level: subscription_list,
+                let message = WebSocketMessage {
+                    ok: Some(true),
+                    id: message.id,
+                    r#type: WebSocketMessageInner::Response {
+                        responding_to: "unsubscribe".to_owned(),
+                        data: WebSocketMessageResponse::Unsubscribe {
+                            subscription_level: subscription_list,
+                        },
                     },
                 };
 
